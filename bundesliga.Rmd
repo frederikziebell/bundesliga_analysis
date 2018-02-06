@@ -1,0 +1,128 @@
+# Packages
+```{r}
+library("pheatmap")
+library("tidyverse")
+```
+
+# Helper functions
+```{r}
+# make history per match day of given team of goal difference and points
+make_team_history <- function(data, team) {
+  data %>%
+    filter(home_team==team | away_team==team) %>%
+    mutate(shot_goals = ifelse(home_team==team, home_goals, away_goals),
+           received_goals = ifelse(home_team==team, away_goals, home_goals)) %>%
+    mutate(points = ifelse(shot_goals>received_goals, 3,ifelse(shot_goals==received_goals,1,0))) %>%
+    mutate(points = cumsum(points)) %>%
+    mutate(goal_diff = shot_goals - received_goals) %>%
+    mutate(goal_diff = cumsum(goal_diff)) %>%
+    mutate(match_day = row_number()) %>%
+    mutate(team = team) %>%
+    select(match_day, team, points, goal_diff)
+}
+
+# makes history for particular data of a season for all teams
+make_history <- function(data) {
+  # get all teams
+  teams <- data$home_team %>% unique
+  # make teamwise history and combine
+  map(teams, ~make_team_history(data,.x)) %>%
+    bind_rows()
+}
+
+make_points_matrix <- function(history) {
+  history %>%
+    select(match_day, team, points) %>%
+    spread(team, points) %>%
+    .[,-1]
+}
+
+
+plot_points <- function(history) {
+  # order of teams given points on last match day
+  team_order <- history %>%
+    filter(match_day==max(match_day)) %>%
+    arrange(desc(points)) %>%
+    pull(team)
+  
+   make_points_matrix(history) %>% 
+    .[,team_order] %>%
+    pheatmap(scale = "row", cluster_rows = F, cluster_cols = F, 
+             main="points", fontsize_row = 8)
+}
+
+make_goal_diff_matrix <- function(history) {
+  history %>%
+    select(match_day, team, goal_diff) %>%
+    spread(team, goal_diff) %>%
+    .[,-1]
+}
+
+
+plot_goal_diff <- function(history) {
+  # order of teams given points on last match day
+  team_order <- history %>%
+    filter(match_day==max(match_day)) %>%
+    arrange(desc(goal_diff)) %>%
+    pull(team)
+  
+   make_goal_diff_matrix(history) %>%
+    .[,team_order] %>%
+    pheatmap(scale = "row", cluster_rows = F, cluster_cols = F,
+             main="goal diff", fontsize_row = 8)
+}
+
+read_season <- function(file) {
+  read_csv(file) %>%
+    select(home_team=HomeTeam, away_team=AwayTeam, home_goals=FTHG, away_goals=FTAG) %>%
+    mutate(season=(file %>% str_extract("[:digit:]{4}_[:digit:]{2}") %>% str_replace("_","/")))
+}
+```
+
+# Load data
+```{r}
+files <- list.files("data", pattern=".csv", full.names = TRUE)
+seasons <- map(files, read_season)
+histories <- map(seasons, make_history)
+```
+
+
+```{r}
+map(histories, plot_points)
+map(histories, plot_goal_diff)
+```
+
+```{r, fig.width=10, fig.height=40}
+library("cluster")
+
+bundesliga_pts_history <- map(histories, make_points_matrix) %>%
+  bind_rows()
+
+bundesliga_goal_diff_history <- map(histories, make_goal_diff_matrix) %>%
+  bind_rows()
+
+
+d <- bundesliga_pts_history %>%
+  t %>%
+  daisy(metric="gower")
+  
+medians <- d %>% 
+  as.matrix %>%
+  rowMedians(na.rm=TRUE)
+
+mat <- d %>% 
+  as.matrix %>%
+  is.na + 0
+
+diss <- as.matrix(d) 
+diss[is.na(diss)] <- 0
+diss <- diss + mat*medians
+dist <- as.dist(diss)
+
+clust <- hclust(dist)
+ 
+
+bundesliga_pts_history %>%
+  pheatmap(cluster_rows = FALSE, cluster_cols = clust, scale="row", border_color = NA)
+```
+
